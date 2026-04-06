@@ -114,6 +114,7 @@ export default function OrderFormPage({ orderId }: { orderId?: number }) {
     },
     onError: (err) => toast.error(err.message),
   });
+  const getUploadUrlMutation = trpc.upload.getUploadUrl.useMutation();
   const uploadMutation = trpc.upload.uploadFile.useMutation();
 
   // Populate form when editing
@@ -157,21 +158,32 @@ export default function OrderFormPage({ orderId }: { orderId?: number }) {
   ) => {
     setUploadingField(field);
     try {
+      // Step 1: Get upload URL
+      const { key } = await getUploadUrlMutation.mutateAsync({
+        filename: file.name,
+        contentType: file.type,
+        folder,
+      });
+      
+      // Step 2: Read file as base64
       const reader = new FileReader();
       const base64Data = await new Promise<string>((resolve, reject) => {
         reader.onload = () => resolve(reader.result as string);
         reader.onerror = reject;
         reader.readAsDataURL(file);
       });
-      const key = `${folder}/${Date.now()}-${file.name}`;
+      
+      // Step 3: Upload file
       const { url } = await uploadMutation.mutateAsync({
         key,
         base64Data,
         contentType: file.type,
       });
+      
       updateField(field, url);
       toast.success("File uploaded successfully");
-    } catch {
+    } catch (error) {
+      console.error("Upload error:", error);
       toast.error("Failed to upload file");
     } finally {
       setUploadingField(null);
