@@ -76,7 +76,7 @@ export function registerAuthRoutes(app: Express) {
         },
       });
     } catch (error) {
-      console.error("[Auth] Login failed:", error);
+      console.error("[Auth] Login failed:", error instanceof Error ? error.message : error, error instanceof Error ? error.stack : '');
       res.status(500).json({ error: "Login failed" });
     }
   });
@@ -145,7 +145,7 @@ export function registerAuthRoutes(app: Express) {
         },
       });
     } catch (error) {
-      console.error("[Auth] Registration failed:", error);
+      console.error("[Auth] Registration failed:", error instanceof Error ? error.message : error, error instanceof Error ? error.stack : '');
       res.status(500).json({ error: "Registration failed" });
     }
   });
