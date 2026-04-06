@@ -4,7 +4,9 @@
 import fs from "fs/promises";
 import path from "path";
 
-const UPLOAD_DIR = "/tmp/uploads";
+// Use /data for persistent storage in Zeabur
+// Mount this path as a volume in Zeabur dashboard
+const UPLOAD_DIR = process.env.UPLOAD_DIR || "/data/uploads";
 const PUBLIC_URL_PREFIX = "/api/files";
 
 // Ensure upload directory exists

@@ -1,5 +1,21 @@
 {
   "build_command": "pnpm install && pnpm build",
   "start_command": "node dist/index.js",
-  "output_dir": "dist"
+  "output_dir": "dist",
+  "ports": [
+    {
+      "port": 3001,
+      "type": "http"
+    }
+  ],
+  "volumes": [
+    {
+      "source": "/data/uploads",
+      "target": "/data/uploads"
+    }
+  ],
+  "env": {
+    "NODE_ENV": "production",
+    "UPLOAD_DIR": "/data/uploads"
+  }
 }

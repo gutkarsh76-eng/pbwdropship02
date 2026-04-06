@@ -19,11 +19,15 @@ RUN pnpm build
 FROM base AS production
 WORKDIR /src
 ENV NODE_ENV=production
+ENV UPLOAD_DIR=/data/uploads
 
 # Copy built files
 COPY --from=build /src/dist ./dist
 COPY --from=build /src/node_modules ./node_modules
 COPY --from=build /src/package.json ./package.json
+
+# Create persistent uploads directory
+RUN mkdir -p /data/uploads && chmod 777 /data/uploads
 
 EXPOSE 3001
 
