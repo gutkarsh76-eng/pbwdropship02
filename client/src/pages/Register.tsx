@@ -5,7 +5,6 @@ import { CheckCircle2, ShieldCheck, AlertCircle } from "lucide-react";
 import { useLocation } from "wouter";
 import { useState } from "react";
 import { toast } from "sonner";
-import { createUser, setCurrentUser, findUserByEmail } from "@/lib/auth";
 
 export default function Register() {
   const [, setLocation] = useLocation();
@@ -42,39 +41,32 @@ export default function Register() {
       return;
     }
 
-    // Validate password strength
-    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
-    if (!passwordRegex.test(password)) {
-      setError("Password must contain uppercase, lowercase, number, and special character (@$!%*?&)");
-      return;
-    }
-
     setLoading(true);
 
     try {
-      // Check if user already exists
-      if (findUserByEmail(email)) {
-        setError("Email already registered");
+      const response = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ email, name, password }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        setError(data.error || "Registration failed");
+        toast.error(data.error || "Registration failed");
         setLoading(false);
         return;
       }
 
-      // Create new user
-      const newUser = createUser(email, name, password, "agent");
-      
-      // Auto-login
-      setCurrentUser({
-        id: newUser.id,
-        email: newUser.email,
-        name: newUser.name,
-        role: newUser.role,
-        createdAt: newUser.createdAt,
-      });
+      // Store user in localStorage for frontend state
+      localStorage.setItem("user", JSON.stringify(data.user));
       
       toast.success("Account created successfully!");
       
       // Redirect to dashboard
-      setLocation("/dashboard");
+      window.location.href = "/dashboard";
     } catch (err: any) {
       setError(err.message || "Registration failed");
       toast.error(err.message || "Registration failed");
@@ -173,15 +165,12 @@ export default function Register() {
               <Input
                 id="password"
                 type="password"
-                placeholder="Create a password (min 8 characters)"
+                placeholder="Create a password (min 6 characters)"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={loading}
                 required
               />
-              <p className="text-xs text-muted-foreground">
-                Must contain uppercase, lowercase, number, and special character (@$!%*?&)
-              </p>
             </div>
 
             <div className="space-y-2">

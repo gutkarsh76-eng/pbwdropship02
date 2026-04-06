@@ -6,7 +6,7 @@ type UseAuthOptions = {
 };
 
 interface User {
-  id: string;
+  id: number;
   email: string;
   name: string;
   role: "admin" | "agent";
@@ -18,7 +18,7 @@ export function useAuth(options?: UseAuthOptions) {
   const [user, setUser] = useState<User | null>(null);
   const [error, setError] = useState<Error | null>(null);
 
-  // Load user from localStorage on mount
+  // Load user from localStorage first for fast UI, then verify with server
   useEffect(() => {
     try {
       const storedUser = localStorage.getItem("user");
@@ -44,6 +44,14 @@ export function useAuth(options?: UseAuthOptions) {
   }, [redirectOnUnauthenticated, redirectPath, loading, user]);
 
   const logout = useCallback(async () => {
+    try {
+      await fetch("/api/auth/logout", {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch (e) {
+      // ignore
+    }
     localStorage.removeItem("user");
     setUser(null);
     window.location.href = "/";

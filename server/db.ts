@@ -73,6 +73,13 @@ export async function getUserById(id: number) {
   return result.length > 0 ? result[0] : undefined;
 }
 
+export async function getUserByEmail(email: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
 export async function getAllAgents() {
   const db = await getDb();
   if (!db) return [];
@@ -89,6 +96,12 @@ export async function updateUserProfile(id: number, data: { name?: string; phone
   const db = await getDb();
   if (!db) return;
   await db.update(users).set({ ...data, updatedAt: new Date() }).where(eq(users.id, id));
+}
+
+export async function updateUserPasswordHash(id: number, passwordHash: string) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(users).set({ passwordHash, updatedAt: new Date() }).where(eq(users.id, id));
 }
 
 // ─── Orders ───────────────────────────────────────────────────────────────────

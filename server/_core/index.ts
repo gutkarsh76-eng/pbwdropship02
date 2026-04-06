@@ -4,10 +4,12 @@ import { createServer } from "http";
 import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
+import { registerAuthRoutes } from "./authRoutes";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { getFileBuffer } from "../storage";
+import { getDb } from "../db";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -31,6 +33,55 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
+  
+  // Run database migration for passwordHash column
+  try {
+    const db = await getDb();
+    if (db) {
+      await (db as any).execute(`ALTER TABLE users ADD COLUMN IF NOT EXISTS passwordHash varchar(255)`);
+      console.log("[DB] Ensured passwordHash column exists");
+      
+      // Seed admin user if not exists
+      const crypto = await import("crypto");
+      const adminEmail = "probadmintonworld@proton.me";
+      const adminPassword = "PBW@Admin@1";
+      const { getUserByEmail, upsertUser, updateUserPasswordHash } = await import("../db");
+      
+      let adminUser = await getUserByEmail(adminEmail);
+      if (!adminUser) {
+        const openId = `local_admin_${crypto.randomBytes(8).toString("hex")}`;
+        await upsertUser({
+          openId,
+          name: "PBW Admin",
+          email: adminEmail,
+          loginMethod: "email",
+          role: "admin",
+          lastSignedIn: new Date(),
+        });
+        adminUser = await getUserByEmail(adminEmail);
+      }
+      
+      if (adminUser && !adminUser.passwordHash) {
+        const salt = crypto.randomBytes(16).toString("hex");
+        const hash = crypto.createHash("sha256").update(salt + adminPassword).digest("hex");
+        await updateUserPasswordHash(adminUser.id, `${salt}:${hash}`);
+        console.log("[DB] Admin user password set");
+      }
+      
+      // Also ensure admin role is set
+      if (adminUser && adminUser.role !== "admin") {
+        await upsertUser({ openId: adminUser.openId, role: "admin" });
+        console.log("[DB] Admin role updated");
+      }
+      
+      console.log("[DB] Admin user ready:", adminEmail);
+    }
+  } catch (error: any) {
+    // Column might already exist, that's fine
+    if (!error?.message?.includes("Duplicate column")) {
+      console.warn("[DB] Migration note:", error?.message);
+    }
+  }
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
@@ -47,6 +98,9 @@ async function startServer() {
   });
   // OAuth callback under /api/oauth/callback
   registerOAuthRoutes(app);
+  
+  // Custom email/password auth routes
+  registerAuthRoutes(app);
   
   // File serving endpoint for uploaded files
   app.get("/api/files/*", async (req, res) => {
@@ -90,11 +144,7 @@ async function startServer() {
   } else {
     serveStatic(app);
   }
-  
-  // Fallback 404 handler
-  app.use((req, res) => {
-    res.status(404).json({ error: "Not found" });
-  });
+
 
   const preferredPort = parseInt(process.env.PORT || "3000");
   const port = await findAvailablePort(preferredPort);

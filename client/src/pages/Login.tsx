@@ -5,7 +5,6 @@ import { CheckCircle2, ShieldCheck, AlertCircle } from "lucide-react";
 import { useLocation } from "wouter";
 import { useState } from "react";
 import { toast } from "sonner";
-import { authenticateUser, setCurrentUser } from "@/lib/auth";
 
 export default function Login() {
   const [, setLocation] = useLocation();
@@ -33,34 +32,32 @@ export default function Login() {
     setLoading(true);
 
     try {
-      // Simulate authentication delay
-      await new Promise(resolve => setTimeout(resolve, 500));
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ email, password }),
+      });
 
-      // Authenticate user
-      const user = authenticateUser(email, password);
-      
-      if (user) {
-        // Store current user
-        setCurrentUser({
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          role: user.role,
-          createdAt: user.createdAt,
-        });
-        
-        toast.success("Login successful!");
-        
-        // Redirect based on role
-        if (user.role === "admin") {
-          setLocation("/admin");
-        } else {
-          setLocation("/dashboard");
-        }
-      } else {
-        setError("Invalid email or password");
-        toast.error("Invalid email or password");
+      const data = await response.json();
+
+      if (!response.ok) {
+        setError(data.error || "Invalid email or password");
+        toast.error(data.error || "Invalid email or password");
         setLoading(false);
+        return;
+      }
+
+      // Store user in localStorage for frontend state
+      localStorage.setItem("user", JSON.stringify(data.user));
+      
+      toast.success("Login successful!");
+      
+      // Redirect based on role
+      if (data.user.role === "admin") {
+        window.location.href = "/admin";
+      } else {
+        window.location.href = "/dashboard";
       }
     } catch (err: any) {
       setError(err.message || "Login failed");

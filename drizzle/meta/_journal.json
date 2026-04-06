@@ -15,6 +15,13 @@
       "when": 1775315693433,
       "tag": "0001_gray_lifeguard",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1775400000000,
+      "tag": "0002_add_password_hash",
+      "breakpoints": true
     }
   ]
 }
