@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import { createServer } from "http";
 import net from "net";
+import mysql from "mysql2/promise";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerAuthRoutes } from "./authRoutes";
@@ -31,57 +32,46 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 }
 
 /**
- * Safely add a column to a table if it doesn't already exist.
- * Works with all MySQL versions (no IF NOT EXISTS needed).
+ * Run migrations using a raw mysql2 connection (bypasses Drizzle's error wrapping).
+ * This lets us properly detect MySQL error codes like ER_DUP_FIELDNAME (1060).
  */
-async function safeAddColumn(db: any, table: string, column: string, definition: string): Promise<boolean> {
-  try {
-    await db.execute(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${definition}`);
-    console.log(`[DB] Added column ${table}.${column}`);
-    return true;
-  } catch (error: any) {
-    const msg = String(error?.message || error || "").toLowerCase();
-    // "Duplicate column name" is the MySQL error; Drizzle may wrap it as "Failed query: ..."
-    if (msg.includes("duplicate column") || msg.includes("failed query")) {
-      console.log(`[DB] Column ${table}.${column} already exists (or migration skipped)`);
-      return false;
-    }
-    // For any other unexpected error, log but don't crash
-    console.warn(`[DB] safeAddColumn ${table}.${column} error:`, msg);
-    return false;
-  }
-}
-
-/**
- * Safely modify a column's type/definition.
- */
-async function safeModifyColumn(db: any, table: string, column: string, definition: string): Promise<void> {
-  try {
-    await db.execute(`ALTER TABLE \`${table}\` MODIFY COLUMN \`${column}\` ${definition}`);
-    console.log(`[DB] Modified column ${table}.${column}`);
-  } catch (error: any) {
-    console.warn(`[DB] Could not modify column ${table}.${column}:`, error?.message);
-  }
-}
-
-async function runMigrations(db: any) {
+async function runMigrations(conn: mysql.Connection) {
   // 1. Ensure 'phone' column exists on users table
-  await safeAddColumn(db, "users", "phone", "varchar(32)");
+  try {
+    await conn.execute("ALTER TABLE `users` ADD COLUMN `phone` varchar(32)");
+    console.log("[DB] Added column users.phone");
+  } catch (err: any) {
+    if (err?.errno === 1060) {
+      console.log("[DB] Column users.phone already exists");
+    } else {
+      console.warn("[DB] Could not add users.phone:", err?.message || err);
+    }
+  }
 
   // 2. Ensure 'passwordHash' column exists on users table
-  await safeAddColumn(db, "users", "passwordHash", "varchar(255)");
+  try {
+    await conn.execute("ALTER TABLE `users` ADD COLUMN `passwordHash` varchar(255)");
+    console.log("[DB] Added column users.passwordHash");
+  } catch (err: any) {
+    if (err?.errno === 1060) {
+      console.log("[DB] Column users.passwordHash already exists");
+    } else {
+      console.warn("[DB] Could not add users.passwordHash:", err?.message || err);
+    }
+  }
 
-  // 3. Ensure role enum includes 'agent' — modify the column to the full enum
-  await safeModifyColumn(db, "users", "role", "enum('user','admin','agent') NOT NULL DEFAULT 'agent'");
+  // 3. Ensure role enum includes 'agent'
+  try {
+    await conn.execute("ALTER TABLE `users` MODIFY COLUMN `role` enum('user','admin','agent') NOT NULL DEFAULT 'agent'");
+    console.log("[DB] Modified column users.role to include 'agent'");
+  } catch (err: any) {
+    console.warn("[DB] Could not modify users.role:", err?.message || err);
+  }
 
   // 4. Ensure orders table exists
   try {
-    await db.execute(`SELECT 1 FROM \`orders\` LIMIT 1`);
-    console.log("[DB] Orders table exists");
-  } catch {
-    console.log("[DB] Creating orders table...");
-    await db.execute(`
-      CREATE TABLE \`orders\` (
+    await conn.execute(`
+      CREATE TABLE IF NOT EXISTS \`orders\` (
         \`id\` int AUTO_INCREMENT NOT NULL,
         \`orderNo\` varchar(64) NOT NULL,
         \`agentId\` int NOT NULL,
@@ -109,17 +99,15 @@ async function runMigrations(db: any) {
         UNIQUE KEY \`orders_orderNo_unique\` (\`orderNo\`)
       )
     `);
-    console.log("[DB] Orders table created");
+    console.log("[DB] Orders table ready");
+  } catch (err: any) {
+    console.warn("[DB] Could not create orders table:", err?.message || err);
   }
 
   // 5. Ensure order_traces table exists
   try {
-    await db.execute(`SELECT 1 FROM \`order_traces\` LIMIT 1`);
-    console.log("[DB] Order traces table exists");
-  } catch {
-    console.log("[DB] Creating order_traces table...");
-    await db.execute(`
-      CREATE TABLE \`order_traces\` (
+    await conn.execute(`
+      CREATE TABLE IF NOT EXISTS \`order_traces\` (
         \`id\` int AUTO_INCREMENT NOT NULL,
         \`orderId\` int NOT NULL,
         \`description\` varchar(512) NOT NULL,
@@ -128,63 +116,99 @@ async function runMigrations(db: any) {
         PRIMARY KEY (\`id\`)
       )
     `);
-    console.log("[DB] Order traces table created");
+    console.log("[DB] Order traces table ready");
+  } catch (err: any) {
+    console.warn("[DB] Could not create order_traces table:", err?.message || err);
   }
 
-  console.log("[DB] All migrations completed successfully");
+  // 6. Verify the users table structure
+  try {
+    const [rows] = await conn.execute("DESCRIBE `users`");
+    const columns = (rows as any[]).map((r: any) => r.Field);
+    console.log("[DB] Users table columns:", columns.join(", "));
+    if (!columns.includes("passwordHash")) {
+      console.error("[DB] CRITICAL: passwordHash column is MISSING from users table!");
+    }
+    if (!columns.includes("phone")) {
+      console.error("[DB] CRITICAL: phone column is MISSING from users table!");
+    }
+  } catch (err: any) {
+    console.warn("[DB] Could not describe users table:", err?.message || err);
+  }
+
+  console.log("[DB] All migrations completed");
 }
 
-async function seedAdminUser(db: any) {
+async function seedAdminUser() {
   const crypto = await import("crypto");
   const adminEmail = "probadmintonworld@proton.me";
   const adminPassword = "PBW@Admin@1";
   const { getUserByEmail, upsertUser, updateUserPasswordHash } = await import("../db");
 
-  let adminUser = await getUserByEmail(adminEmail);
-  if (!adminUser) {
-    const openId = `local_admin_${crypto.randomBytes(8).toString("hex")}`;
-    await upsertUser({
-      openId,
-      name: "PBW Admin",
-      email: adminEmail,
-      loginMethod: "email",
-      role: "admin",
-      lastSignedIn: new Date(),
-    });
-    adminUser = await getUserByEmail(adminEmail);
-  }
+  try {
+    let adminUser = await getUserByEmail(adminEmail);
+    if (!adminUser) {
+      const openId = `local_admin_${crypto.randomBytes(8).toString("hex")}`;
+      await upsertUser({
+        openId,
+        name: "PBW Admin",
+        email: adminEmail,
+        loginMethod: "email",
+        role: "admin",
+        lastSignedIn: new Date(),
+      });
+      adminUser = await getUserByEmail(adminEmail);
+    }
 
-  if (adminUser && !adminUser.passwordHash) {
-    const salt = crypto.randomBytes(16).toString("hex");
-    const hash = crypto.createHash("sha256").update(salt + adminPassword).digest("hex");
-    await updateUserPasswordHash(adminUser.id, `${salt}:${hash}`);
-    console.log("[DB] Admin user password set");
-  }
+    if (adminUser && !adminUser.passwordHash) {
+      const salt = crypto.randomBytes(16).toString("hex");
+      const hash = crypto.createHash("sha256").update(salt + adminPassword).digest("hex");
+      await updateUserPasswordHash(adminUser.id, `${salt}:${hash}`);
+      console.log("[DB] Admin user password set");
+    }
 
-  // Also ensure admin role is set
-  if (adminUser && adminUser.role !== "admin") {
-    await upsertUser({ openId: adminUser.openId, role: "admin" });
-    console.log("[DB] Admin role updated");
-  }
+    // Also ensure admin role is set
+    if (adminUser && adminUser.role !== "admin") {
+      await upsertUser({ openId: adminUser.openId, role: "admin" });
+      console.log("[DB] Admin role updated");
+    }
 
-  console.log("[DB] Admin user ready:", adminEmail);
+    console.log("[DB] Admin user ready:", adminEmail);
+  } catch (error: any) {
+    console.error("[DB] Admin seeding error:", error?.message);
+  }
 }
 
 async function startServer() {
   const app = express();
   const server = createServer(app);
   
-  // Run database migrations
-  try {
-    const db = await getDb();
-    if (db) {
-      await runMigrations(db);
-      await seedAdminUser(db);
-    } else {
-      console.warn("[DB] Database not available — skipping migrations");
+  // Run database migrations using raw mysql2 connection (not Drizzle)
+  if (process.env.DATABASE_URL) {
+    let conn: mysql.Connection | null = null;
+    try {
+      conn = await mysql.createConnection(process.env.DATABASE_URL);
+      console.log("[DB] Raw MySQL connection established for migrations");
+      await runMigrations(conn);
+    } catch (error: any) {
+      console.error("[DB] Migration connection error:", error?.message);
+    } finally {
+      if (conn) {
+        try { await conn.end(); } catch {}
+      }
     }
-  } catch (error: any) {
-    console.error("[DB] Migration error:", error?.message);
+
+    // Seed admin user using Drizzle (after migrations ensure schema is correct)
+    try {
+      const db = await getDb();
+      if (db) {
+        await seedAdminUser();
+      }
+    } catch (error: any) {
+      console.error("[DB] Admin seeding error:", error?.message);
+    }
+  } else {
+    console.warn("[DB] DATABASE_URL not set — skipping migrations");
   }
 
   // Configure body parser with larger size limit for file uploads
