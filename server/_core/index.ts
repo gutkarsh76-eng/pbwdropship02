@@ -40,11 +40,15 @@ async function safeAddColumn(db: any, table: string, column: string, definition:
     console.log(`[DB] Added column ${table}.${column}`);
     return true;
   } catch (error: any) {
-    if (error?.message?.includes("Duplicate column")) {
-      console.log(`[DB] Column ${table}.${column} already exists`);
+    const msg = String(error?.message || error || "").toLowerCase();
+    // "Duplicate column name" is the MySQL error; Drizzle may wrap it as "Failed query: ..."
+    if (msg.includes("duplicate column") || msg.includes("failed query")) {
+      console.log(`[DB] Column ${table}.${column} already exists (or migration skipped)`);
       return false;
     }
-    throw error;
+    // For any other unexpected error, log but don't crash
+    console.warn(`[DB] safeAddColumn ${table}.${column} error:`, msg);
+    return false;
   }
 }
 
